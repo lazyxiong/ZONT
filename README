@@ -1,0 +1,6 @@
+Zont is a russian word for umbrella.
+This simple Rake-based test framework (monitor) which allows you to
+run arbitrary tests and generate reports - works like an umbrella for your testsuite.
+For more info and usage run: rake help
+
+Formerly it was hosted by my other github account: http://github.com/lazybear
