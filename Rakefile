@@ -19,18 +19,20 @@
 
 require "timeout"
 require "fileutils"
+require "yaml"
 
 # -- global vars
 task :default => [:run]
-@test_dir              = "tests"
-@excludes              = ".svn"
+@suite_root            = File.expand_path "#{File.dirname(__FILE__)}"
+@rake_env_file         = "#{@suite_root}/rake.env.yaml"
+@rake_env_user_file    = "#{@suite_root}/user.rake.env.yaml"
 @tests                 = []
 @tests_retried_counter = 0
 @executed_tests        = 0
 @reports_dir           = ENV['HOME'] + "/rake_reports" # -- default
 @reports_dir           = ENV['REPORTS_DIR'] if ENV['REPORTS_DIR'] != nil
 #
-# -- the following vars control the behavior of running tests
+# -- the following vars control the behavior of running tests: default values
 @test_data = {
    'output_on'                => false,
    'test_retry'               => true,
@@ -39,8 +41,36 @@ task :default => [:run]
    'test_exit_status_skipped' => "SKIPPED",
    'xml_report_class_name'    => "qa.tests",
    'xml_report_file_name'     => "TESTS-TestSuites.xml",
-   'reports_dir'              => @reports_dir
+   'interpreter'              => "ruby",
+   'test_extension'           => ".rb",
+   'excludes'                 => ".svn",
+   'test_dir'                 => "tests"
 }
+
+#    *************************** BEGIN SETUP ***************************
+
+# -- write out test data hash into a YAML file to hold basic ZONT environment
+def write(filename, hash)
+   File.open(filename, "w") { |f| f.write(hash.to_yaml) }
+end
+
+# -- if 'rake.env.yaml' exists, load values from there into @test_data hash; otherwise write defaults to newly created 'rake.env.yaml' file.
+if File.exist?(@rake_env_file)
+   @test_data = YAML::load(File.read(@rake_env_file))
+else
+   puts "\n\n-- INFO: {#{@rake_env_file}}  doesn't exist, it will be created with default values.\n\n"
+   write(@rake_env_file, @test_data)
+end
+# -- loading user-defined properties from yaml: if 'rake.env.user.yaml' file exists, we'll use it to overwrite @test_data hash
+if File.exist?(@rake_env_user_file)
+   YAML::load(File.read(@rake_env_user_file)).each_pair { |key, value|
+      @test_data[key] = value if @test_data[key] != nil
+   }
+end
+#    *************************** END SETUP ***************************
+
+# -- merge any other variables into @test_data hash that we don't want to be stored in the 'rake.env' file
+@test_data.merge!({'reports_dir' => @reports_dir})
 
 # -- usage
 desc "-- usage"
@@ -60,7 +90,8 @@ task :help do
     puts "   # @description some interesting test\n\n"
     puts "   Note 1:\n\n   Your test must end with 'test.rb' - otherwise Rake won't be able to find it, eg:\n"
     puts "   tests/some_new_test.rb\n\n"
-    puts "   Note 2:\n\n   Your test must define at least one keyword.\n\n"
+    puts "   Note 2:\n\n   Your test must define at least one keyword.\n\n\n"
+    puts "   'rake.yaml' file will be created (if it doesn't already exist) with default values controlling behavior of Rake.\n\n\n"
 end
 
 # -- prepare reports_dir
@@ -123,8 +154,9 @@ def load_test(tc)
    data = Hash.new
    File.open(tc, "r") do |infile|
       while (line = infile.gets)
-         test                  = /^.*\/(.*\.rb)/.match(tc)[1]
-         data['execute_class'] = /^(.*\.rb)/.match(tc)[1]
+         #test                  = /^.*\/(.*\.rb)/.match(tc)[1]
+         test                  = /^.*\/([A-Za-z0-9_-]*[T|t]est.*)/.match(tc)[1]
+         data['execute_class'] = /^([A-Za-z0-9_-]*[T|t]est.*)/.match(tc)[1]
          data['path']          = /(.*)\/#{test}/.match(tc)[1]
          data['execute_args']  = /^#[\s]*@executeArgs[\s]*(.*)/.match(line)[1] if /^#[\s]*@executeArgs/.match(line)
          data['author']        = /^#[\s]*@author[\s]*(.*)/.match(line)[1] if /^#[\s]*@author/.match(line)
@@ -138,7 +170,7 @@ end
 # -- find tests and load them one by one, applying keyword-filter at the end
 desc "-- find all tests..."
 task :find_all do
-   FileList["#{@test_dir}/**/*test.rb"].exclude(@excludes).each { |tc_name|
+   FileList["#{@test_data['test_dir']}/**/*[T|t]est#{@test_data['test_extension']}"].exclude(@test_data['excludes']).each { |tc_name|
       load_test(tc_name)
    }
    filter_by_keywords
@@ -344,10 +376,10 @@ class Test
        print("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{@cmd}] ")
        begin
           status = Timeout::timeout(@timeout.to_i) {
-             @output      = `ruby #{@cmd} 2>&1`
+             @output      = `#{@test_data['interpreter']} #{@cmd} 2>&1`
              @exit_status = case @output
-                when /PASSED/ then @test_data['test_exit_status_passed']
-                when /FAILED/ then @test_data['test_exit_status_failed']
+                when /#{@test_data['test_exit_status_passed']}/ then @test_data['test_exit_status_passed']
+                when /#{@test_data['test_exit_status_failed']}/ then @test_data['test_exit_status_failed']
                 else @test_data['test_exit_status_failed']
              end
           }
