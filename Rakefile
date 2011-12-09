@@ -36,9 +36,9 @@ task :default => [:run]
 @test_data = {
    'output_on'                => false,
    'test_retry'               => true,
-   'test_exit_status_passed'  => "PASSED",
-   'test_exit_status_failed'  => "FAILED",
-   'test_exit_status_skipped' => "SKIPPED",
+   'test_exit_message_passed'  => "PASSED",
+   'test_exit_message_failed'  => "FAILED",
+   'test_exit_message_skipped' => "SKIPPED",
    'xml_report_class_name'    => "qa.tests",
    'xml_report_file_name'     => "TESTS-TestSuites.xml",
    'interpreter'              => "ruby",
@@ -203,7 +203,7 @@ task :run do
       begin
          t.validate
          # -- do we run test more than once if it failed first time ?
-         if (t.exit_status == @test_data['test_exit_status_failed']) and (@test_data['test_retry'])
+         if (t.exit_status == @test_data['test_exit_message_failed']) and (@test_data['test_retry'])
             puts("-- first attempt failed, will try again...")
             t.validate
             @tests_retried_counter += 1
@@ -231,9 +231,9 @@ end
 
 # -- what do we do on exit ?
 def clean_exit
-   passed  = all_by_exit_status(@test_data['test_exit_status_passed'])
-   failed  = all_by_exit_status(@test_data['test_exit_status_failed'])
-   skipped = all_by_exit_status(@test_data['test_exit_status_skipped'])
+   passed  = all_by_exit_status(@test_data['test_exit_message_passed'])
+   failed  = all_by_exit_status(@test_data['test_exit_message_failed'])
+   skipped = all_by_exit_status(@test_data['test_exit_message_skipped'])
    @test_data.merge!({'execution_time' => @execution_time, 'passed' => passed, 'failed' => failed, 'skipped' => skipped})
    Publisher.new(@test_data).publish_reports
    puts("\n==> DONE\n\n")
@@ -355,7 +355,7 @@ class Test
           write_log
        else
           # -- skipping this test
-          @exit_status = @test_data['test_exit_status_skipped']
+          @exit_status = @test_data['test_exit_message_skipped']
        end
     end
 
@@ -378,14 +378,14 @@ class Test
           status = Timeout::timeout(@timeout.to_i) {
              @output      = `#{@test_data['interpreter']} #{@cmd} 2>&1`
              @exit_status = case @output
-                when /#{@test_data['test_exit_status_passed']}/ then @test_data['test_exit_status_passed']
-                when /#{@test_data['test_exit_status_failed']}/ then @test_data['test_exit_status_failed']
-                else @test_data['test_exit_status_failed']
+                when /#{@test_data['test_exit_message_passed']}/ then @test_data['test_exit_message_passed']
+                when /#{@test_data['test_exit_message_failed']}/ then @test_data['test_exit_message_failed']
+                else @test_data['test_exit_message_failed']
              end
           }
        rescue Timeout::Error => e
           @output << "\n\n[ TERMINATED WITH TIMEOUT (#{@timeout.to_s}) ]"
-          @exit_status = @test_data['test_exit_status_failed']
+          @exit_status = @test_data['test_exit_message_failed']
        ensure
           puts @exit_status
           puts @output if @test_data['output_on']
