@@ -35,7 +35,7 @@ task :default => [:run]
 # -- the following vars control the behavior of running tests: default values
 @test_data = {
    'output_on'                => false,
-   'test_retry'               => true,
+   'test_retry'               => false,
    'test_exit_message_passed'  => "PASSED",
    'test_exit_message_failed'  => "FAILED",
    'test_exit_message_skipped' => "SKIPPED",
