@@ -56,7 +56,7 @@ end
 
 # -- if 'rake.env.yaml' exists, load values from there into @test_data hash; otherwise write defaults to newly created 'rake.env.yaml' file.
 if File.exist?(@rake_env_file)
-   @test_data = YAML::load(File.read(@rake_env_file))
+   @test_data.merge!(YAML::load(File.read(@rake_env_file)))
 else
    puts "\n\n-- INFO: {#{@rake_env_file}}  doesn't exist, it will be created with default values.\n\n"
    write(@rake_env_file, @test_data)
