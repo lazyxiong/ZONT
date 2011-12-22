@@ -17,6 +17,9 @@
 #
 # -- usage: rake help
 
+require 'net/pop'
+require 'net/smtp'
+require 'tlsmail'
 require "timeout"
 require "fileutils"
 require "yaml"
@@ -34,17 +37,26 @@ task :default => [:run]
 #
 # -- the following vars control the behavior of running tests: default values
 @test_data = {
-   'output_on'                => false,
-   'test_retry'               => false,
+   'output_on'                 => false,
+   'test_retry'                => false,
    'test_exit_message_passed'  => "PASSED",
    'test_exit_message_failed'  => "FAILED",
    'test_exit_message_skipped' => "SKIPPED",
-   'xml_report_class_name'    => "qa.tests",
-   'xml_report_file_name'     => "TESTS-TestSuites.xml",
-   'interpreter'              => "ruby",
-   'test_extension'           => ".rb",
-   'excludes'                 => ".svn",
-   'test_dir'                 => "tests"
+   'xml_report_class_name'     => "qa.tests",
+   'xml_report_file_name'      => "TESTS-TestSuites.xml",
+   'interpreter'               => "ruby",
+   'test_extension'            => ".rb",
+   'excludes'                  => ".svn",
+   'test_dir'                  => "tests",
+   # -- mail related vars
+   'pop_host'                  => "pop.gmail.com",
+   'pop_port'                  => 995,
+   'smtp_host'                 => "smtp.gmail.com",
+   'smtp_port'                 => 587,
+   'mail_domain'               => "gmail.com",
+   'user_name'                 => "",
+   'user_passwd'               => "",
+   'reply_email'               => ""
 }
 
 #    *************************** BEGIN SETUP ***************************
@@ -61,16 +73,16 @@ else
    puts "\n\n-- INFO: {#{@rake_env_file}}  doesn't exist, it will be created with default values.\n\n"
    write(@rake_env_file, @test_data)
 end
-# -- loading user-defined properties from yaml: if 'rake.env.user.yaml' file exists, we'll use it to overwrite @test_data hash
+# -- loading user-defined properties from yaml: if 'user.rake.env.yaml' file exists, we'll use it to overwrite @test_data hash
 if File.exist?(@rake_env_user_file)
    YAML::load(File.read(@rake_env_user_file)).each_pair { |key, value|
       @test_data[key] = value if @test_data[key] != nil
    }
 end
-#    *************************** END SETUP ***************************
-
-# -- merge any other variables into @test_data hash that we don't want to be stored in the 'rake.env' file
+# -- merge any other variables that we don't want to be stored in the 'rake.env' file into @test_data hash
 @test_data.merge!({'reports_dir' => @reports_dir})
+
+#    *************************** END SETUP ***************************
 
 # -- usage
 desc "-- usage"
@@ -81,7 +93,9 @@ task :help do
     puts "   rake run KEYWORDS=<keyword1,keyword2>         : this will run tests based on keyword"
     puts "   rake print_human                              : this will print descriptions of your tests"
     puts "   rake print_human KEYWORDS=<keyword1,keyword2> : same as above, but only for tests corresponding to KEYWORDS"
-    puts "   rake REPORTS_DIR=</path/to/reports>           : this will set default reports dir and run all tests\n\n\n\n"
+    puts "   rake REPORTS_DIR=</path/to/reports>           : this will set default reports dir and run all tests"
+    puts "   rake mail_gateway                             : this will activate email remote control which will listen for remote commands"
+    puts "   rake mail_gateway_help                        : prints basic help for using email remote control\n\n"
     puts "   Eg:\n\n   rake KEYWORDS=<keyword1, keyword2> REPORTS_DIR=/somewhere/path\n\n\n"
     puts "   Sample comments in your tests (eg: tests/some_test.rb):\n\n"
     puts "   # @author Alexandre Berman"
@@ -92,6 +106,21 @@ task :help do
     puts "   tests/some_new_test.rb\n\n"
     puts "   Note 2:\n\n   Your test must define at least one keyword.\n\n\n"
     puts "   'rake.yaml' file will be created (if it doesn't already exist) with default values controlling behavior of Rake.\n\n\n"
+end
+
+# -- mail gateway usage
+def mail_help
+   xxx  = "-- Following messages are supported: \n\n"
+   xxx += "  '==help==' system will reply with this message\n"
+   xxx += "  '==list==' system will reply with list of available programs\n"
+   xxx += "  '==play <KEYWORD>==' system will run a program specified by 'KEYWORD'\n\n"
+   return xxx
+end
+
+# -- mail gateway usage
+desc "-- mail gateway usage"
+task :mail_gateway_help do
+   puts mail_help
 end
 
 # -- prepare reports_dir
@@ -174,6 +203,62 @@ task :find_all do
       load_test(tc_name)
    }
    filter_by_keywords
+end
+
+# -- do_reply
+def do_reply(subject, msg)
+   full_msg=<<END_OF_MESSAGE
+From: #{@test_data['user_name']}
+To: #{@test_data['reply_email']}
+Subject: #{subject}
+Date: #{Time.now}
+
+#{msg}
+END_OF_MESSAGE
+   Net::SMTP.enable_tls(OpenSSL::SSL::VERIFY_NONE)
+   Net::SMTP.start(@test_data['smtp_host'], @test_data['smtp_port'], @test_data['mail_domain'], @test_data['user_name'], @test_data['user_passwd'], :login) { |smtp|
+      smtp.send_message(full_msg, @test_data['user_name'], @test_data['reply_email'])
+   }
+end
+
+# -- pop mail
+def pop_mail
+   Net::POP3.enable_ssl(OpenSSL::SSL::VERIFY_NONE)
+   Net::POP3.start(@test_data['pop_host'], @test_data['pop_port'], @test_data['user_name'], @test_data['user_passwd']) do |pop|
+      if pop.mails.empty?
+         puts("-- no mail.")
+      else
+         pop.each_mail do |m|
+            puts("-- >>> processing new message ...")
+	    msg = m.pop
+            if !/==.*==/.match(msg)
+               do_reply("-- ERROR: wrong argument supplied !", mail_help)
+	    else
+	       msg = /^.*(==.*==).*$/.match(msg)[0].gsub(/==/, '').strip
+	       case msg
+                  when /help/
+                     do_reply("-- Help on using mail interface delivered !", mail_help)
+                  when /list/
+                     xxx = `rake print_human`
+                     do_reply("-- list of objects delivered !", xxx)
+                  when /play\s+.*$/
+	             keyword = msg.gsub(/play/, '').strip
+                     xxx  = "-- executing: rake KEYWORD='" + keyword + "'\n\n"
+		     xxx += `rake KEYWORD='#{keyword}'`
+                     do_reply("-- status of playback delivered", xxx)
+	       end
+	    end
+            m.delete
+            puts "-- >>> done ..."
+         end
+      end
+   end
+end
+
+# -- start mail gateway
+desc "-- start mail gateway..."
+task :mail_gateway do
+   pop_mail
 end
 
 # -- print tests
