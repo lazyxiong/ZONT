@@ -36,6 +36,7 @@ task :default => [:run]
 @executed_tests        = 0
 @reports_dir           = ENV['HOME'] + "/rake_reports" # -- default
 @reports_dir           = ENV['REPORTS_DIR'] if ENV['REPORTS_DIR'] != nil
+ENV["REPORTS_DIR"]     = @reports_dir
 #
 # -- the following vars control the behavior of running tests: default values
 @test_data = {
@@ -511,7 +512,6 @@ class Test
 
     def run
        @cmd = @cmd + " " + @execute_args unless @execute_args == ""
-       ENV["REPORT_FILE"] = File.join(@test_data['reports_dir'], @execute_class)
        tStart = Time.now
        print("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{@cmd}] ")
        begin
