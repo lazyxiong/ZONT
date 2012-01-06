@@ -239,8 +239,8 @@ def play_request(keyword)
       xxx = "-- Jenkins job was invoked with supplied parameter: " + keyword + "\n\n-- url: " + url
       do_reply("-- Jenkins job invoked", xxx)
    else
-      xxx  = "-- executing: rake KEYWORD='" + keyword + "'\n\n"
-      xxx += `rake KEYWORD='#{keyword}'`
+      xxx  = "-- executing: rake KEYWORDS='" + keyword + "'\n\n"
+      xxx += `rake KEYWORDS='#{keyword}'`
       do_reply("-- status of playback delivered", xxx)
    end
 end
