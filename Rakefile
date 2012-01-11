@@ -51,6 +51,7 @@ ENV["REPORTS_DIR"]     = @reports_dir
    'test_extension'            => ".rb",
    'excludes'                  => ".svn",
    'test_dir'                  => "tests",
+   'test_timeout'              => 1200, # -- miliseconds
    # -- mail related vars
    'pop_host'                  => "pop.gmail.com",
    'pop_port'                  => 995,
@@ -473,7 +474,7 @@ class Test
        @exit_status    = @output = @path = @execute_class = @execute_args = @keywords = @description = @author = ""
        @test_data      = test_data
        @execution_time = 0.0
-       @timeout        = 1200 # miliseconds
+       @timeout        = @test_data['test_timeout']
        @path           = hash['path']
        @execute_class  = hash['execute_class']
        @execute_args   = hash['execute_args']
