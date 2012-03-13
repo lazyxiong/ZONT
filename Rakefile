@@ -41,7 +41,7 @@ ENV["REPORTS_DIR"]     = @reports_dir
 # -- the following vars control the behavior of running tests: default values
 @test_data = {
    'output_on'                 => false,
-   'test_retry'                => false,
+   'test_retry'                => 0,
    'test_exit_message_passed'  => "PASSED",
    'test_exit_message_failed'  => "FAILED",
    'test_exit_message_skipped' => "SKIPPED",
@@ -345,10 +345,13 @@ task :run do
       begin
          t.validate
          # -- do we run test more than once if it failed first time ?
-         if (t.exit_status == @test_data['test_exit_message_failed']) and (@test_data['test_retry'])
-            puts("-- first attempt failed, will try again...")
-            t.validate
-            @tests_retried_counter += 1
+         if (t.exit_status == @test_data['test_exit_message_failed']) and (@test_data['test_retry'] > 0)
+            puts("-- first attempt failed, will try again for {#{@test_data['test_retry']}} number of times...")
+	    while(@tests_retried_counter < @test_data['test_retry'])
+               @tests_retried_counter += 1
+               t.validate
+	       @tests_retried_counter = @test_data['test_retry'] if t.exit_status == @test_data['test_exit_message_passed']
+	    end
          end
       rescue => e
          puts "-- ERROR: " + e.inspect
@@ -385,7 +388,7 @@ def clean_exit
    puts("      -- tests passed    : #{passed.length.to_s}\n")
    puts("      -- tests failed    : #{failed.length.to_s}\n")
    puts("      -- tests skipped   : #{skipped.length.to_s}\n")
-   if @test_data['test_retry']
+   if (@test_data['test_retry'] > 0)
       puts("      -- tests re-tried  : #{@tests_retried_counter.to_s}\n")
    end
    if failed.length > 0
