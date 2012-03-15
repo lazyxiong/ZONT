@@ -346,11 +346,14 @@ task :run do
          t.validate
          # -- do we run test more than once if it failed first time ?
          if (t.exit_status == @test_data['test_exit_message_failed']) and (@test_data['test_retry'] > 0)
-            puts("-- first attempt failed, will try again for {#{@test_data['test_retry']}} number of times...")
-	    while(@tests_retried_counter < @test_data['test_retry'])
-               @tests_retried_counter += 1
+            puts("-- first attempt failed, will try again for a total of {#{@test_data['test_retry']}} number of times...")
+	    retried_counter = 0
+	    @tests_retried_counter += 1
+	    while(retried_counter < @test_data['test_retry'])
+	       puts("-- {#{@test_data['test_retry'] - retried_counter}} number of attempts left...")
+               retried_counter += 1
                t.validate
-	       @tests_retried_counter = @test_data['test_retry'] if t.exit_status == @test_data['test_exit_message_passed']
+	       retried_counter = @test_data['test_retry'] if t.exit_status == @test_data['test_exit_message_passed']
 	    end
          end
       rescue => e
