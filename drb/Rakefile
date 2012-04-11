@@ -26,6 +26,7 @@ require "timeout"
 require "fileutils"
 require "yaml"
 require "drb"
+require "thread"
 
 # -- global vars
 task :default => [:run]
@@ -99,6 +100,7 @@ task :help do
     puts "   rake help                                     : print this message"
     puts "   rake                                          : this will by default run :run task, which runs all tests"
     puts "   rake run KEYWORDS=<keyword1,keyword2>         : this will run tests based on keyword"
+    puts "   rake drb KEYWORDS=<keyword1,keyword2>         : this will run framework in DRb mode to allow parallel test execution by drb clients"
     puts "   rake print_human                              : this will print descriptions of your tests"
     puts "   rake print_human KEYWORDS=<keyword1,keyword2> : same as above, but only for tests corresponding to KEYWORDS"
     puts "   rake REPORTS_DIR=</path/to/reports>           : this will set default reports dir and run all tests"
@@ -347,15 +349,15 @@ end
 # -- main class
 class MainClass
    include DRbUndumped
-   attr_accessor :tests, :config, :execution_time, :tests_retried_counter, :executed_tests, :exit_status, :t_start, :t_finish
+   attr_accessor :tests, :config, :execution_time, :tests_retried_counter, :exit_status, :t_start, :t_finish
 
    def initialize(tests, config)
       @tests                 = tests
       @config                = config
       @execution_time        = 0
       @tests_retried_counter = 0
-      @executed_tests        = 0
       @exit_status           = 0
+      @mutex                 = Mutex.new
    end
 
    def start_drb
@@ -375,7 +377,15 @@ class MainClass
    end
 
    def p(s)
-      puts s
+      @mutex.synchronize do
+         puts s
+      end
+   end
+
+   def inc_tests_retried_counter
+      @mutex.synchronize do
+         @tests_retried_counter += 1
+      end
    end
 
    # -- normal run
@@ -389,7 +399,8 @@ class MainClass
             if (t.exit_status == @config['test_exit_message_failed']) and (@config['test_retry'] > 0)
                puts("-- first attempt failed, will try again for a total of {#{@config['test_retry']}} number of times...")
 	       retried_counter = 0
-	       @tests_retried_counter += 1
+	       #@tests_retried_counter += 1
+	       inc_tests_retried_counter
 	       while(retried_counter < @config['test_retry'])
 	          puts("-- {#{@config['test_retry'] - retried_counter}} number of attempts left...")
                   retried_counter += 1
@@ -400,8 +411,6 @@ class MainClass
          rescue => e
             puts "-- ERROR: " + e.inspect
             puts "   (in test: #{t.execute_class})"
-         ensure
-            @executed_tests += 1
          end
       }
       tFinish = Time.now
@@ -424,11 +433,12 @@ class MainClass
       passed  = all_by_exit_status(@config['test_exit_message_passed'])
       failed  = all_by_exit_status(@config['test_exit_message_failed'])
       skipped = all_by_exit_status(@config['test_exit_message_skipped'])
+      total   = passed.length + failed.length + skipped.length
       @config.merge!({'execution_time' => @execution_time, 'passed' => passed, 'failed' => failed, 'skipped' => skipped})
       Publisher.new(@config).publish_reports
       puts("\n==> DONE\n\n")
       puts("      -- execution time  : #{@execution_time.to_s} secs\n")
-      puts("      -- tests executed  : #{@executed_tests.to_s}\n")
+      puts("      -- tests executed  : #{total.to_s}\n")
       puts("      -- reports prepared: #{@config['reports_dir']}\n")
       puts("      -- tests passed    : #{passed.length.to_s}\n")
       puts("      -- tests failed    : #{failed.length.to_s}\n")
