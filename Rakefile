@@ -25,21 +25,23 @@ require 'tlsmail'
 require "timeout"
 require "fileutils"
 require "yaml"
+require "drb"
+require "thread"
+require 'google_spreadsheet'
 
 # -- global vars
 task :default => [:run]
+STDOUT.sync = true
 @suite_root            = File.expand_path "#{File.dirname(__FILE__)}"
 @rake_env_file         = "#{@suite_root}/rake.env.yaml"
 @rake_env_user_file    = "#{@suite_root}/user.rake.env.yaml"
 @tests                 = []
-@tests_retried_counter = 0
-@executed_tests        = 0
 @reports_dir           = ENV['HOME'] + "/rake_reports" # -- default
 @reports_dir           = ENV['REPORTS_DIR'] if ENV['REPORTS_DIR'] != nil
 ENV["REPORTS_DIR"]     = @reports_dir
 #
 # -- the following vars control the behavior of running tests: default values
-@test_data = {
+@config = {
    'output_on'                 => false,
    'test_retry'                => 0,
    'test_exit_message_passed'  => "PASSED",
@@ -52,6 +54,10 @@ ENV["REPORTS_DIR"]     = @reports_dir
    'excludes'                  => ".svn",
    'test_dir'                  => "tests",
    'test_timeout'              => 1200, # -- miliseconds
+   # -- statistics report ?
+   'publish_statistics'        => false,
+   'statistics_test_list'      => "",
+   'gs_credentials'            => { 'key' => "", 'user' => "", 'password' => "" },
    # -- mail related vars
    'pop_host'                  => "pop.gmail.com",
    'pop_port'                  => 995,
@@ -74,21 +80,21 @@ def write(filename, hash)
    File.open(filename, "w") { |f| f.write(hash.to_yaml) }
 end
 
-# -- if 'rake.env.yaml' exists, load values from there into @test_data hash; otherwise write defaults to newly created 'rake.env.yaml' file.
+# -- if 'rake.env.yaml' exists, load values from there into @config hash; otherwise write defaults to newly created 'rake.env.yaml' file.
 if File.exist?(@rake_env_file)
-   @test_data.merge!(YAML::load(File.read(@rake_env_file)))
+   @config.merge!(YAML::load(File.read(@rake_env_file)))
 else
    puts "\n\n-- INFO: {#{@rake_env_file}}  doesn't exist, it will be created with default values.\n\n"
-   write(@rake_env_file, @test_data)
+   write(@rake_env_file, @config)
 end
-# -- loading user-defined properties from yaml: if 'user.rake.env.yaml' file exists, we'll use it to overwrite @test_data hash
+# -- loading user-defined properties from yaml: if 'user.rake.env.yaml' file exists, we'll use it to overwrite @config hash
 if File.exist?(@rake_env_user_file)
    YAML::load(File.read(@rake_env_user_file)).each_pair { |key, value|
-      @test_data[key] = value if @test_data[key] != nil
+      @config[key] = value if @config[key] != nil
    }
 end
-# -- merge any other variables that we don't want to be stored in the 'rake.env' file into @test_data hash
-@test_data.merge!({'reports_dir' => @reports_dir})
+# -- merge any other variables that we don't want to be stored in the 'rake.env' file into @config hash
+@config.merge!({'reports_dir' => @reports_dir})
 
 #    *************************** END SETUP ***************************
 
@@ -99,6 +105,7 @@ task :help do
     puts "   rake help                                     : print this message"
     puts "   rake                                          : this will by default run :run task, which runs all tests"
     puts "   rake run KEYWORDS=<keyword1,keyword2>         : this will run tests based on keyword"
+    puts "   rake drb KEYWORDS=<keyword1,keyword2>         : this will run framework in DRb mode to allow parallel test execution by drb clients"
     puts "   rake print_human                              : this will print descriptions of your tests"
     puts "   rake print_human KEYWORDS=<keyword1,keyword2> : same as above, but only for tests corresponding to KEYWORDS"
     puts "   rake REPORTS_DIR=</path/to/reports>           : this will set default reports dir and run all tests"
@@ -133,13 +140,8 @@ end
 
 # -- prepare reports_dir
 def prepare_reports_dir
-   FileUtils.rm_r(@test_data['reports_dir']) if File.directory?(@test_data['reports_dir'])
-   FileUtils.mkdir_p(@test_data['reports_dir'])
-end
-
-# -- our own each method yielding each test in the @tests array
-def each
-   @tests.each { |t| yield t }
+   FileUtils.rm_r(@config['reports_dir']) if File.directory?(@config['reports_dir'])
+   FileUtils.mkdir_p(@config['reports_dir'])
 end
 
 # -- filtering by keywords
@@ -201,13 +203,13 @@ def load_test(tc)
          data['description']   = /^#[\s]*@description[\s]*(.*)/.match(line)[1] if /^#[\s]*@description/.match(line)
       end
    end
-   @tests << Test.new(data, @test_data) if data['keywords'] != nil and data['keywords'] != ""
+   @tests << Test.new(data, @config) if data['keywords'] != nil and data['keywords'] != ""
 end
 
 # -- find tests and load them one by one, applying keyword-filter at the end
 desc "-- find all tests..."
 task :find_all do
-   FileList["#{@test_data['test_dir']}/**/*[T|t]est#{@test_data['test_extension']}"].exclude(@test_data['excludes']).each { |tc_name|
+   FileList["#{@config['test_dir']}/**/*[T|t]est#{@config['test_extension']}"].exclude(@config['excludes']).each { |tc_name|
       load_test(tc_name)
    }
    filter_by_keywords
@@ -218,24 +220,24 @@ end
 # -- do_reply
 def do_reply(subject, msg)
    full_msg=<<END_OF_MESSAGE
-From: #{@test_data['user_name']}
-To: #{@test_data['reply_email']}
+From: #{@config['user_name']}
+To: #{@config['reply_email']}
 Subject: #{subject}
 Date: #{Time.now}
 
 #{msg}
 END_OF_MESSAGE
    Net::SMTP.enable_tls(OpenSSL::SSL::VERIFY_NONE)
-   Net::SMTP.start(@test_data['smtp_host'], @test_data['smtp_port'], @test_data['mail_domain'], @test_data['user_name'], @test_data['user_passwd'], :login) { |smtp|
-      smtp.send_message(full_msg, @test_data['user_name'], @test_data['reply_email'])
+   Net::SMTP.start(@config['smtp_host'], @config['smtp_port'], @config['mail_domain'], @config['user_name'], @config['user_passwd'], :login) { |smtp|
+      smtp.send_message(full_msg, @config['user_name'], @config['reply_email'])
    }
 end
 
 # -- play received request
 def play_request(keyword)
    # -- we either execute program marked by received keyword directly, or trigger Jenkins build
-   if @test_data['use_jenkins']
-      url = @test_data['jenkins_job_url'] + @test_data['jenkins_job_parameter'] + "=" + keyword
+   if @config['use_jenkins']
+      url = @config['jenkins_job_url'] + @config['jenkins_job_parameter'] + "=" + keyword
       Net::HTTP.get(URI.parse("#{url}"))
       xxx = "-- Jenkins job was invoked with supplied parameter: " + keyword + "\n\n-- url: " + url
       do_reply("-- Jenkins job invoked", xxx)
@@ -271,7 +273,7 @@ end
 # -- pop mail
 def pop_mail
    Net::POP3.enable_ssl(OpenSSL::SSL::VERIFY_NONE)
-   Net::POP3.start(@test_data['pop_host'], @test_data['pop_port'], @test_data['user_name'], @test_data['user_passwd']) do |pop|
+   Net::POP3.start(@config['pop_host'], @config['pop_port'], @config['user_name'], @config['user_passwd']) do |pop|
       if pop.mails.empty?
          puts("-- no mail.")
       else
@@ -293,7 +295,7 @@ def pop_mail
                   when /play\s+.*$/
 	             keyword = msg.gsub(/play/, '').strip
 		     # -- do we have two-step-authentication enabled ?
-		     if @test_data['two_step_authentication']
+		     if @config['two_step_authentication']
 		        authentication_send_code(keyword)
 		     else
 		        play_request(keyword)
@@ -322,7 +324,7 @@ end
 desc "-- print tests..."
 task :print_human do
    Rake::Task["find_all"].invoke
-   each { |t|
+   @tests.each { |t|
       begin
          puts t.to_s
       rescue => e
@@ -335,79 +337,160 @@ end
 # -- run all tests
 desc "-- run all tests..."
 task :run do
-   # -- first, let's setup/cleanup reports_dir
    prepare_reports_dir
-   # -- now, find all tests
    Rake::Task["find_all"].invoke
-   tStart = Time.now
-   # -- let's run each test now
-   each { |t|
-      begin
-         t.validate
-         # -- do we run test more than once if it failed first time ?
-         if (t.exit_status == @test_data['test_exit_message_failed']) and (@test_data['test_retry'] > 0)
-            puts("-- first attempt failed, will try again for a total of {#{@test_data['test_retry']}} number of times...")
-	    retried_counter = 0
-	    @tests_retried_counter += 1
-	    while(retried_counter < @test_data['test_retry'])
-	       puts("-- {#{@test_data['test_retry'] - retried_counter}} number of attempts left...")
-               retried_counter += 1
-               t.validate
-	       retried_counter = @test_data['test_retry'] if t.exit_status == @test_data['test_exit_message_passed']
-	    end
-         end
-      rescue => e
-         puts "-- ERROR: " + e.inspect
-         puts "   (in test: #{t.execute_class})"
-      ensure
-         @executed_tests += 1
+   MainClass.new(@tests, @config).normal_run
+end
+
+# -- DRB related
+desc "-- start DRB service"
+task :drb do
+   prepare_reports_dir
+   Rake::Task["find_all"].invoke
+   # -- TODO: prepare a shell script which will call drb_client.rb <tests/some_test.rb> for as many tests as we have found
+   MainClass.new(@tests, @config).start_drb
+end
+
+# -- main class
+class MainClass
+   include DRbUndumped
+   attr_accessor :tests, :config, :execution_time, :tests_retried_counter, :exit_status, :t_start, :t_finish
+
+   def initialize(tests, config)
+      @tests                 = tests
+      @config                = config
+      @execution_time        = 0
+      @tests_retried_counter = 0
+      @exit_status           = 0
+      @mutex                 = Mutex.new
+   end
+
+   def start_drb
+      DRb.start_service('druby://localhost:9000', self)
+      puts("-- drb service started on: " + DRb.uri)
+      @t_start = Time.now
+      DRb.thread.join # Don't exit just yet!
+   end
+
+   def stop_drb
+      sleep 1
+      @t_finish = Time.now
+      @execution_time = @t_finish - @t_start
+      DRb.stop_service
+      print_summary
+      clean_exit
+   end
+
+   def p(s)
+      @mutex.synchronize do
+         puts s
       end
-   }
-   tFinish = Time.now
-   @execution_time = tFinish - tStart
-   clean_exit
-end
-
-# -- total by exit status
-def all_by_exit_status(status)
-   a = Array.new
-   each { |t|
-      a << t if t.exit_status == status
-   }
-   return a
-end
-
-# -- what do we do on exit ?
-def clean_exit
-   passed  = all_by_exit_status(@test_data['test_exit_message_passed'])
-   failed  = all_by_exit_status(@test_data['test_exit_message_failed'])
-   skipped = all_by_exit_status(@test_data['test_exit_message_skipped'])
-   @test_data.merge!({'execution_time' => @execution_time, 'passed' => passed, 'failed' => failed, 'skipped' => skipped})
-   Publisher.new(@test_data).publish_reports
-   puts("\n==> DONE\n\n")
-   puts("      -- execution time  : #{@execution_time.to_s} secs\n")
-   puts("      -- tests executed  : #{@executed_tests.to_s}\n")
-   puts("      -- reports prepared: #{@test_data['reports_dir']}\n")
-   puts("      -- tests passed    : #{passed.length.to_s}\n")
-   puts("      -- tests failed    : #{failed.length.to_s}\n")
-   puts("      -- tests skipped   : #{skipped.length.to_s}\n")
-   if (@test_data['test_retry'] > 0)
-      puts("      -- tests re-tried  : #{@tests_retried_counter.to_s}\n")
    end
-   if failed.length > 0
-      puts("\n\n==> STATUS: [ some tests failed - execution failed ]\n")
-      exit(1)
+
+   def inc_tests_retried_counter
+      @mutex.synchronize do
+         @tests_retried_counter += 1
+      end
    end
-   exit(0)
+
+   # -- normal run
+   def normal_run
+      tStart = Time.now
+      # -- let's run each test now
+      @tests.each { |t|
+         begin
+            t.validate
+            # -- do we run test more than once if it failed first time ?
+            if (t.exit_status == @config['test_exit_message_failed']) and (@config['test_retry'] > 0)
+               puts("-- first attempt failed, will try again for a total of {#{@config['test_retry']}} number of times...")
+	       retried_counter = 0
+	       #@tests_retried_counter += 1
+	       inc_tests_retried_counter
+	       while(retried_counter < @config['test_retry'])
+	          puts("-- {#{@config['test_retry'] - retried_counter}} number of attempts left...")
+                  retried_counter += 1
+                  t.validate
+	          retried_counter = @config['test_retry'] if t.exit_status == @config['test_exit_message_passed']
+	       end
+            end
+         rescue => e
+            puts "-- ERROR: " + e.inspect
+            puts "   (in test: #{t.execute_class})"
+         end
+      }
+      tFinish = Time.now
+      @execution_time = tFinish - tStart
+      print_summary
+      publish_stats
+      clean_exit
+   end
+
+   # -- total by exit status
+   def all_by_exit_status(status)
+      a = Array.new
+      @tests.each { |t|
+         a << t if t.exit_status == status
+      }
+      return a
+   end
+
+   # -- what do we do on exit ?
+   def print_summary
+      passed  = all_by_exit_status(@config['test_exit_message_passed'])
+      failed  = all_by_exit_status(@config['test_exit_message_failed'])
+      skipped = all_by_exit_status(@config['test_exit_message_skipped'])
+      total   = passed.length + failed.length + skipped.length
+      @config.merge!({'execution_time' => @execution_time, 'passed' => passed, 'failed' => failed, 'skipped' => skipped})
+      Publisher.new(@config).publish_reports
+      puts("\n==> DONE\n\n")
+      puts("      -- execution time  : #{@execution_time.to_s} secs\n")
+      puts("      -- tests executed  : #{total.to_s}\n")
+      puts("      -- reports prepared: #{@config['reports_dir']}\n")
+      puts("      -- tests passed    : #{passed.length.to_s}\n")
+      puts("      -- tests failed    : #{failed.length.to_s}\n")
+      puts("      -- tests skipped   : #{skipped.length.to_s}\n")
+      if (@config['test_retry'] > 0)
+         puts("      -- tests re-tried  : #{@tests_retried_counter.to_s}\n")
+      end
+      if failed.length > 0
+         puts("\n\n==> STATUS: [ some tests failed - execution failed ]\n")
+         @exit_status = 1
+      end
+   end
+
+   # -- may need to publish some stats: only for passed tests
+   def publish_stats
+      if @config['publish_statistics']
+         puts("\n\n-- publishing stats...")
+	 session = GoogleSpreadsheet.login(@config['gs_credentials']['user'], @config['gs_credentials']['password'])
+	 worksheet = session.spreadsheet_by_key(@config['gs_credentials']['key']).worksheets[0]
+	 @tests.each { |t|
+	    if @config['statistics_test_list'].include?(t.execute_class) and t.exit_status == @config['test_exit_message_passed']
+	       puts("       => " + t.execute_class)
+	       row = worksheet.num_rows + 1 # -- should point to the first empty row
+	       worksheet[row, 1] = t.execute_class
+	       worksheet[row, 2] = t.execution_time.to_i.to_s
+	       worksheet[row, 3] = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+	    end
+	 }
+	 worksheet.save
+	 puts("\n-- Done.\n\n")
+      end
+   end
+
+   # -- clean exit
+   def clean_exit
+      exit(@exit_status)
+   end
 end
 
 #
 # ::: Publisher [ creating report files ] :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #
 class Publisher
-   def initialize(test_data)
-      @test_data = test_data
-      @total     = @test_data['passed'].length + @test_data['failed'].length + @test_data['skipped'].length
+   def initialize(config)
+      @config = config
+      @total     = @config['passed'].length + @config['failed'].length + @config['skipped'].length
    end
 
    def write_file(file, data)
@@ -416,11 +499,11 @@ class Publisher
 
    def create_html_reports(status)
       output  = "<html><body>\n\nTests that #{status}:<br><br><table><tr><td>test</td><td>time</td></tr><tr></tr>\n"
-      @test_data[status].each { |t|
+      @config[status].each { |t|
          output += "<tr><td><a href='#{t.execute_class}.html'>#{t.execute_class}</a></td><td>#{t.execution_time}</td></tr>\n"
       }
       output += "</table></body></html>"
-      write_file(@test_data['reports_dir'] + "/#{status}.html", output)
+      write_file(@config['reports_dir'] + "/#{status}.html", output)
    end
 
    def publish_reports
@@ -428,26 +511,26 @@ class Publisher
       # -- create an xml file
       document  = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n"
       document += "<testsuites>\n"
-      document += "   <testsuite successes='#{@test_data['passed'].length}'"
-      document += "   skipped='#{@test_data['skipped'].length}' failures='#{@test_data['failed'].length}'"
-      document += "   time='#{@test_data['execution_time']}' name='FunctionalTestSuite' tests='#{@total}'>\n"
-      if @test_data['passed'].length > 0
-         @test_data['passed'].each  { |t|
-            document += "   <testcase name='#{t.execute_class}' classname='#{@test_data['xml_report_class_name']}' time='#{t.execution_time}'>\n"
+      document += "   <testsuite successes='#{@config['passed'].length}'"
+      document += "   skipped='#{@config['skipped'].length}' failures='#{@config['failed'].length}'"
+      document += "   time='#{@config['execution_time']}' name='FunctionalTestSuite' tests='#{@total}'>\n"
+      if @config['passed'].length > 0
+         @config['passed'].each  { |t|
+            document += "   <testcase name='#{t.execute_class}' classname='#{@config['xml_report_class_name']}' time='#{t.execution_time}'>\n"
             document += "      <passed message='Test Passed'><![CDATA[\n\n#{t.output}\n\n]]>\n       </passed>\n"
             document += "   </testcase>\n"
          }
       end
-      if @test_data['failed'].length > 0
-         @test_data['failed'].each  { |t|
-            document += "   <testcase name='#{t.execute_class}' classname='#{@test_data['xml_report_class_name']}' time='#{t.execution_time}'>\n"
+      if @config['failed'].length > 0
+         @config['failed'].each  { |t|
+            document += "   <testcase name='#{t.execute_class}' classname='#{@config['xml_report_class_name']}' time='#{t.execution_time}'>\n"
             document += "      <error message='Test Failed'><![CDATA[\n\n#{t.output}\n\n]]>\n       </error>\n"
             document += "   </testcase>\n"
          }
       end
-      if @test_data['skipped'].length > 0
-         @test_data['skipped'].each  { |t|
-            document += "   <testcase name='#{t.execute_class}' classname='#{@test_data['xml_report_class_name']}' time='#{t.execution_time}'>\n"
+      if @config['skipped'].length > 0
+         @config['skipped'].each  { |t|
+            document += "   <testcase name='#{t.execute_class}' classname='#{@config['xml_report_class_name']}' time='#{t.execution_time}'>\n"
             document += "      <skipped message='Test Skipped'><![CDATA[\n\n#{t.output}\n\n]]>\n       </skipped>\n"
             document += "   </testcase>\n"
          }
@@ -455,14 +538,14 @@ class Publisher
       document += "   </testsuite>\n"
       document += "</testsuites>\n"
       # -- write XML report
-      write_file(@test_data['reports_dir'] + "/" + @test_data['xml_report_file_name'], document)
+      write_file(@config['reports_dir'] + "/" + @config['xml_report_file_name'], document)
       # -- write HTML report
       totals  = "<html><body>\n\nTotal tests: #{@total.to_s}<br>\n"
-      totals += "Passed: <a href='passed.html'>#{@test_data['passed'].length.to_s}</a><br>\n"
-      totals += "Failed: <a href='failed.html'>#{@test_data['failed'].length.to_s}</a><br>\n"
-      totals += "Skipped: <a href='skipped.html'>#{@test_data['skipped'].length.to_s}</a><br>\n"
-      totals += "Execution time: #{@test_data['execution_time']}<br>\n</body></html>"
-      write_file(@test_data['reports_dir'] + "/report.html", totals)
+      totals += "Passed: <a href='passed.html'>#{@config['passed'].length.to_s}</a><br>\n"
+      totals += "Failed: <a href='failed.html'>#{@config['failed'].length.to_s}</a><br>\n"
+      totals += "Skipped: <a href='skipped.html'>#{@config['skipped'].length.to_s}</a><br>\n"
+      totals += "Execution time: #{@config['execution_time']}<br>\n</body></html>"
+      write_file(@config['reports_dir'] + "/report.html", totals)
       # -- create individual html report files complete with test output
       create_html_reports("passed")
       create_html_reports("failed")
@@ -474,13 +557,14 @@ end
 # ::: Test class [ running a test ] :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #
 class Test
+    include DRbUndumped
     attr_accessor :path, :execute_class, :execute_args, :keywords, :description, :author,
-                  :exit_status, :output, :execution_time, :test_data
-    def initialize(hash, test_data)
+                  :exit_status, :output, :execution_time, :config, :timeout
+    def initialize(hash, config)
        @exit_status    = @output = @path = @execute_class = @execute_args = @keywords = @description = @author = ""
-       @test_data      = test_data
+       @config         = config
        @execution_time = 0.0
-       @timeout        = @test_data['test_timeout']
+       @timeout        = @config['test_timeout']
        @path           = hash['path']
        @execute_class  = hash['execute_class']
        @execute_args   = hash['execute_args']
@@ -503,7 +587,7 @@ class Test
           write_log
        else
           # -- skipping this test
-          @exit_status = @test_data['test_exit_message_skipped']
+          @exit_status = @config['test_exit_message_skipped']
        end
     end
 
@@ -513,8 +597,15 @@ class Test
 
     def write_log
        d = /^(.*\/).*/.match(@execute_class)[1]
-       FileUtils.mkdir_p(@test_data['reports_dir'] + "/#{d}")
-       write_file(@test_data['reports_dir'] + "/#{@execute_class}.html", "<html><body><pre>" + @output + "</pre></body></html>")
+       FileUtils.mkdir_p(@config['reports_dir'] + "/#{d}")
+       file = @config['reports_dir'] + "/#{@execute_class}.html"
+       # -- append a date_time if file already exist
+       if File.exist?(file)
+	  t      = Time.now
+  	  suffix = t.year.to_s + t.month.to_s.rjust(2,"0") + t.day.to_s.rjust(2,"0") + t.hour.to_s + t.min.to_s + t.sec.to_s
+	  file   = @config['reports_dir'] + "/" + @execute_class + "_" + suffix + '.html'
+       end
+       write_file(file, "<html><body><pre>" + @output + "</pre></body></html>")
     end
 
     def run
@@ -523,19 +614,19 @@ class Test
        print("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{@cmd}] ")
        begin
           status = Timeout::timeout(@timeout.to_i) {
-             @output      = `#{@test_data['interpreter']} #{@cmd} 2>&1`
+             @output      = `#{@config['interpreter']} #{@cmd} 2>&1`
              @exit_status = case @output
-                when /#{@test_data['test_exit_message_passed']}/ then @test_data['test_exit_message_passed']
-                when /#{@test_data['test_exit_message_failed']}/ then @test_data['test_exit_message_failed']
-                else @test_data['test_exit_message_failed']
+                when /#{@config['test_exit_message_passed']}/ then @config['test_exit_message_passed']
+                when /#{@config['test_exit_message_failed']}/ then @config['test_exit_message_failed']
+                else @config['test_exit_message_failed']
              end
           }
        rescue Timeout::Error => e
           @output << "\n\n[ TERMINATED WITH TIMEOUT (#{@timeout.to_s}) ]"
-          @exit_status = @test_data['test_exit_message_failed']
+          @exit_status = @config['test_exit_message_failed']
        ensure
           puts @exit_status
-          puts @output if @test_data['output_on']
+          puts @output if @config['output_on']
        end
        tFinish = Time.now
        @execution_time = tFinish - tStart
