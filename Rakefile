@@ -35,6 +35,7 @@ STDOUT.sync = true
 @suite_root            = File.expand_path "#{File.dirname(__FILE__)}"
 @rake_env_file         = "#{@suite_root}/rake.env.yaml"
 @rake_env_user_file    = "#{@suite_root}/user.rake.env.yaml"
+@exclude_list_file     = "#{@suite_root}/exclude_list.txt"
 @tests                 = []
 @reports_dir           = ENV['HOME'] + "/rake_reports" # -- default
 @reports_dir           = ENV['REPORTS_DIR'] if ENV['REPORTS_DIR'] != nil
@@ -54,6 +55,8 @@ ENV["REPORTS_DIR"]     = @reports_dir
    'excludes'                  => ".svn",
    'test_dir'                  => "tests",
    'test_timeout'              => 1200, # -- miliseconds
+   # -- exclude_list
+   'exclude_list'              => [],
    # -- statistics report ?
    'publish_statistics'        => false,
    'statistics_test_list'      => "",
@@ -95,6 +98,9 @@ if File.exist?(@rake_env_user_file)
 end
 # -- merge any other variables that we don't want to be stored in the 'rake.env' file into @config hash
 @config.merge!({'reports_dir' => @reports_dir})
+
+# -- do we have exclude_list ?
+@config['exclude_list'] = File.read(@exclude_list_file) if File.exists?(@exclude_list_file)
 
 #    *************************** END SETUP ***************************
 
@@ -436,16 +442,18 @@ class MainClass
 
    # -- what do we do on exit ?
    def print_summary
-      passed  = all_by_exit_status(@config['test_exit_message_passed'])
-      failed  = all_by_exit_status(@config['test_exit_message_failed'])
-      skipped = all_by_exit_status(@config['test_exit_message_skipped'])
-      total   = passed.length + failed.length + skipped.length
+      passed   = all_by_exit_status(@config['test_exit_message_passed'])
+      failed   = all_by_exit_status(@config['test_exit_message_failed'])
+      skipped  = all_by_exit_status(@config['test_exit_message_skipped'])
+      executed = passed.length + failed.length
+      total    = passed.length + failed.length + skipped.length
       @config.merge!({'execution_time' => @execution_time, 'passed' => passed, 'failed' => failed, 'skipped' => skipped})
       Publisher.new(@config).publish_reports
       puts("\n==> DONE\n\n")
       puts("      -- execution time  : #{@execution_time.to_s} secs\n")
-      puts("      -- tests executed  : #{total.to_s}\n")
       puts("      -- reports prepared: #{@config['reports_dir']}\n")
+      puts("      -- tests total     : #{total.to_s}\n")
+      puts("      -- tests executed  : #{executed.to_s}\n")
       puts("      -- tests passed    : #{passed.length.to_s}\n")
       puts("      -- tests failed    : #{failed.length.to_s}\n")
       puts("      -- tests skipped   : #{skipped.length.to_s}\n")
@@ -576,6 +584,7 @@ class Test
 
     # -- we should do something useful here
     def is_valid
+       return false if @config['exclude_list'].include?(@execute_class)
        return true
     end
 
