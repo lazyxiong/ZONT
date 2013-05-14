@@ -1,11 +1,18 @@
 require 'drb'
 require "timeout"
 
+# -- this script needs to be run after ZONT was started with "drb" option, eg:
+#    ruby drb_client.rb tests/login_logout_test.rb
+
 @class       = ARGV[0]
 @tests       = nil
 @test        = nil
 @exit_status = nil
 STDOUT.sync  = true
+
+raise "-- ERROR: must supply valid test as an argument !" unless @class
+raise "-- ERROR: test not found (#{@class}) !" unless File.file?(@class)
+exit 0
 
 # -- establish connection to drb server and find our test
 DRb.start_service()
@@ -17,12 +24,11 @@ DRb.start_service()
 
 def run_test(cmd)
    tStart = Time.now
+   @obj.pprint("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{cmd}] ")
    begin
       status = Timeout::timeout(@test.timeout.to_i) {
-         @obj.p("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{cmd}] ")
          output = `#{cmd} 2>&1`
 	 @test.output = output
-         #@test.exit_status = case @test.output
          @exit_status = case @test.output
             when /#{@config['test_exit_message_passed']}/ then @config['test_exit_message_passed']
             when /#{@config['test_exit_message_failed']}/ then @config['test_exit_message_failed']
@@ -32,6 +38,9 @@ def run_test(cmd)
    rescue Timeout::Error => e
       @test.output << "\n\n[ TERMINATED WITH TIMEOUT (#{@test.timeout.to_s}) ]"
       @exit_status = @config['test_exit_message_failed']
+   ensure
+      @obj.p @exit_status
+      @obj.p @output if @config['output_on']
    end
    tFinish = Time.now
    @test.execution_time = tFinish - tStart

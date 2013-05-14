@@ -17,10 +17,20 @@
 #
 # -- usage: rake help
 
+require 'rubygems'
 require 'net/pop'
 require 'net/smtp'
 require 'net/http'
 require 'uri'
+# -- get rid of annoying warnings about defined variables
+require 'net/pop'
+Net.instance_eval {remove_const :POP} if defined?(Net::POP)
+Net.instance_eval {remove_const :POPSession} if defined?(Net::POPSession)
+Net.instance_eval {remove_const :POP3Session} if defined?(Net::POP3Session)
+Net.instance_eval {remove_const :APOPSession} if defined?(Net::APOPSession)
+Net::POP3.instance_eval {remove_const :Revision} if defined?(Net::POP3::Revision)
+require 'net/smtp'
+Net.instance_eval {remove_const :SMTPSession} if defined?(Net::SMTPSession)
 require 'tlsmail'
 require "timeout"
 require "fileutils"
@@ -331,11 +341,14 @@ desc "-- print tests..."
 task :print_human do
    Rake::Task["find_all"].invoke
    @tests.each { |t|
-      begin
-         puts t.to_s
-      rescue => e
-         puts "-- ERROR: " + e.inspect
-         puts "   (in test: #{t.execute_class})"
+      # -- only print it if it is not in the exclude list
+      if !@config['exclude_list'].include?(t.execute_class)
+         begin
+            puts t.to_s
+         rescue => e
+            puts "-- ERROR: " + e.inspect
+            puts "   (in test: #{t.execute_class})"
+         end
       end
    }
 end
@@ -390,6 +403,12 @@ class MainClass
    def p(s)
       @mutex.synchronize do
          puts s
+      end
+   end
+
+   def pprint(s)
+      @mutex.synchronize do
+         print s
       end
    end
 
@@ -545,6 +564,8 @@ class Publisher
       end
       document += "   </testsuite>\n"
       document += "</testsuites>\n"
+      # -- remove any occurences of '&&' (like in possible output of javascript functions)
+      document.gsub!(/&&/,'')
       # -- write XML report
       write_file(@config['reports_dir'] + "/" + @config['xml_report_file_name'], document)
       # -- write HTML report
