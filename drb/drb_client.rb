@@ -12,19 +12,19 @@ STDOUT.sync  = true
 
 raise "-- ERROR: must supply valid test as an argument !" unless @class
 raise "-- ERROR: test not found (#{@class}) !" unless File.file?(@class)
-exit 0
 
 # -- establish connection to drb server and find our test
 DRb.start_service()
 @obj = DRbObject.new(nil, 'druby://localhost:9000')
+@config = @obj.config
 @tests = @obj.tests
 @tests.extend DRbUndumped
 @tests.each { |t| @test = t if @class.include?(t.execute_class) }
-@config = @obj.config
+exit 0 unless @test # -- if our test is not supposed to be running, we simply exit here
 
 def run_test(cmd)
    tStart = Time.now
-   @obj.pprint("-- #{tStart.strftime('[%H:%M:%S]')} running: [#{cmd}] ")
+   @out = "-- #{tStart.strftime('[%H:%M:%S]')} running: [#{cmd}] "
    begin
       status = Timeout::timeout(@test.timeout.to_i) {
          output = `#{cmd} 2>&1`
@@ -38,9 +38,13 @@ def run_test(cmd)
    rescue Timeout::Error => e
       @test.output << "\n\n[ TERMINATED WITH TIMEOUT (#{@test.timeout.to_s}) ]"
       @exit_status = @config['test_exit_message_failed']
+   rescue => e
+      @test.output << "\n\n[ ERROR ]\n\n"
+      @test.output << e.inspect
+      @exit_status = @config['test_exit_message_failed']
    ensure
-      @obj.p @exit_status
-      @obj.p @output if @config['output_on']
+      @obj.p(@out.to_s + @exit_status.to_s)
+      @obj.p(@output) if @config['output_on']
    end
    tFinish = Time.now
    @test.execution_time = tFinish - tStart

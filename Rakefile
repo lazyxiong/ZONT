@@ -366,7 +366,6 @@ desc "-- start DRB service"
 task :drb do
    prepare_reports_dir
    Rake::Task["find_all"].invoke
-   # -- TODO: prepare a shell script which will call drb_client.rb <tests/some_test.rb> for as many tests as we have found
    MainClass.new(@tests, @config).start_drb
 end
 
@@ -388,7 +387,18 @@ class MainClass
       DRb.start_service('druby://localhost:9000', self)
       puts("-- drb service started on: " + DRb.uri)
       @t_start = Time.now
+      sleep 3
+      run_in_parallel
+      sleep 3
       DRb.thread.join # Don't exit just yet!
+   end
+
+   def run_in_parallel
+      @tests.each { |t|
+         puts("-- starting: " + t.execute_class)
+         fork { `ruby drb_client.rb #{t.execute_class}` }
+	 sleep 1
+      }
    end
 
    def stop_drb
@@ -397,6 +407,7 @@ class MainClass
       @execution_time = @t_finish - @t_start
       DRb.stop_service
       print_summary
+      publish_stats
       clean_exit
    end
 
