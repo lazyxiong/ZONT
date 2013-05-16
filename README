@@ -1,6 +1,31 @@
 Zont is a russian word for umbrella.
 This simple Rake-based test framework (monitor) which allows you to
 run arbitrary tests and generate reports - works like an umbrella for your testsuite.
-For more info and usage run: rake help
+ZONT is test-agnostic, that is - it doesn't know about what your tests do and how they are written.
 
 Formerly it was hosted by my other github account: http://github.com/lazybear
+
+Among its features are:
+
+- ability to run tests in parallel using DRb (distributed ruby)
+- keyword-based test execution (filter tests by keywords, much like gmail labels)
+- creation of 2 types of reports: human-readable .html reports and .xml report for CI consumption (works with Jenkins)
+- ability to run not only ruby tests, but in principle - tests written in any language (language agnostic framework)
+- ability to trigger test execution via email (tested with gmail) 
+
+There is a "tests" directory included with 2 sample tests.
+To get started, simply clone this workspace and execute:
+
+rake
+
+To see keywords in action, try:
+
+rake KEYWORDS=passing
+
+and
+
+rake KEYWORDS=failing
+
+For more info and usage run:
+
+rake help

@@ -124,7 +124,7 @@ task :help do
     puts "   rake help                                     : print this message"
     puts "   rake                                          : this will by default run :run task, which runs all tests"
     puts "   rake run KEYWORDS=<keyword1,keyword2>         : this will run tests based on keyword"
-    puts "   rake drb KEYWORDS=<keyword1,keyword2>         : this will run framework in DRb mode to allow parallel test execution by drb clients"
+    puts "   rake drb KEYWORDS=<keyword1,keyword2>         : this will run framework in DRb mode and execute tests in parallel, where each test is invoked by drb client"
     puts "   rake print_human                              : this will print descriptions of your tests"
     puts "   rake print_human KEYWORDS=<keyword1,keyword2> : same as above, but only for tests corresponding to KEYWORDS"
     puts "   rake REPORTS_DIR=</path/to/reports>           : this will set default reports dir and run all tests"
@@ -392,7 +392,6 @@ class MainClass
       @t_start = Time.now
       sleep 3
       run_in_parallel
-      sleep 3
       DRb.thread.join # Don't exit just yet!
    end
 
@@ -415,9 +414,9 @@ class MainClass
 
    def execute_batch(batch)
       batch.each { |t|
-         puts("-- starting: " + t.execute_class)
-         fork { `ruby drb_client.rb #{t.execute_class}` }
 	 sleep 1
+         puts("-- starting: " + t.execute_class)
+         fork { `ruby drb/drb_client.rb #{t.execute_class}` }
       }
    end
 
