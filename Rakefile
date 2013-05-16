@@ -65,6 +65,9 @@ ENV["REPORTS_DIR"]     = @reports_dir
    'excludes'                  => ".svn",
    'test_dir'                  => "tests",
    'test_timeout'              => 1200, # -- miliseconds
+   # -- related to parallel execution (DRb)
+   'between_batch_wait_time'   => 200,  # -- wait 200 seconds (a little over 3 min) for a batch of tests to finish execution, before starting next batch
+   'batch_size'                => 5,    # -- default batch size (5 tests to run in parallel)
    # -- exclude_list
    'exclude_list'              => [],
    # -- statistics report ?
@@ -394,7 +397,24 @@ class MainClass
    end
 
    def run_in_parallel
+      batch = Array.new
+      index = 0
       @tests.each { |t|
+	 if index == @config['batch_size']
+	    index = 0
+	    execute_batch(batch)
+	    batch.clear
+	    sleep @config['between_batch_wait_time']
+	 end
+         index += 1
+	 batch << t
+      }
+      # -- execute leftover batch
+      execute_batch(batch)
+   end
+
+   def execute_batch(batch)
+      batch.each { |t|
          puts("-- starting: " + t.execute_class)
          fork { `ruby drb_client.rb #{t.execute_class}` }
 	 sleep 1
