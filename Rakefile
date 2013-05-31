@@ -50,6 +50,7 @@ STDOUT.sync = true
 @reports_dir           = ENV['HOME'] + "/rake_reports" # -- default
 @reports_dir           = ENV['REPORTS_DIR'] if ENV['REPORTS_DIR'] != nil
 ENV["REPORTS_DIR"]     = @reports_dir
+@ZONT_ID               = "[ ZONT Test Framework: http://github.com/lazyxiong/ZONT ]"
 #
 # -- the following vars control the behavior of running tests: default values
 @config = {
@@ -359,6 +360,7 @@ end
 # -- run all tests
 desc "-- run all tests..."
 task :run do
+   puts("\n\n-- " + @ZONT_ID + "\n\n")
    prepare_reports_dir
    Rake::Task["find_all"].invoke
    MainClass.new(@tests, @config).normal_run
