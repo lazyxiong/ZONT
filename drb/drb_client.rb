@@ -1,8 +1,7 @@
-require 'drb'
-require "timeout"
-
 # -- this script needs to be run after ZONT was started with "drb" option, eg:
 #    ruby drb_client.rb tests/login_logout_test.rb
+require 'drb'
+require "timeout"
 
 @class       = ARGV[0]
 @tests       = nil
