@@ -18,26 +18,15 @@
 # -- usage: rake help
 
 require 'rubygems'
-require 'net/pop'
-require 'net/smtp'
 require 'net/http'
 require 'uri'
-# -- get rid of annoying warnings about defined variables
-require 'net/pop'
-Net.instance_eval {remove_const :POP} if defined?(Net::POP)
-Net.instance_eval {remove_const :POPSession} if defined?(Net::POPSession)
-Net.instance_eval {remove_const :POP3Session} if defined?(Net::POP3Session)
-Net.instance_eval {remove_const :APOPSession} if defined?(Net::APOPSession)
-Net::POP3.instance_eval {remove_const :Revision} if defined?(Net::POP3::Revision)
-require 'net/smtp'
-Net.instance_eval {remove_const :SMTPSession} if defined?(Net::SMTPSession)
-require 'tlsmail'
+require 'mail'
 require "timeout"
 require "fileutils"
 require "yaml"
 require "drb"
 require "thread"
-require 'google_spreadsheet'
+require 'google_drive'
 
 # -- global vars
 task :default => [:run]
@@ -140,7 +129,7 @@ task :help do
     puts "   Note 1:\n\n   Your test must end with 'test.rb' - otherwise Rake won't be able to find it, eg:\n"
     puts "   tests/some_new_test.rb\n\n"
     puts "   Note 2:\n\n   Your test must define at least one keyword.\n\n\n"
-    puts "   'rake.yaml' file will be created (if it doesn't already exist) with default values controlling behavior of Rake.\n\n\n"
+    puts "   {#{@rake_env_file}} file will be created (if it doesn't already exist) with default values controlling behavior of Rake.\n\n\n"
 end
 
 # -- mail gateway usage
@@ -235,24 +224,6 @@ task :find_all do
    filter_by_keywords
 end
 
-# -- BEGIN EMAIL GATEWAY RELATED CODE
-
-# -- do_reply
-def do_reply(subject, msg)
-   full_msg=<<END_OF_MESSAGE
-From: #{@config['user_name']}
-To: #{@config['reply_email']}
-Subject: #{subject}
-Date: #{Time.now}
-
-#{msg}
-END_OF_MESSAGE
-   Net::SMTP.enable_tls(OpenSSL::SSL::VERIFY_NONE)
-   Net::SMTP.start(@config['smtp_host'], @config['smtp_port'], @config['mail_domain'], @config['user_name'], @config['user_passwd'], :login) { |smtp|
-      smtp.send_message(full_msg, @config['user_name'], @config['reply_email'])
-   }
-end
-
 # -- play received request
 def play_request(keyword)
    # -- we either execute program marked by received keyword directly, or trigger Jenkins build
@@ -266,6 +237,24 @@ def play_request(keyword)
       xxx += `rake KEYWORDS='#{keyword}'`
       do_reply("-- status of playback delivered", xxx)
    end
+end
+
+# -- *************** BEGIN EMAIL GATEWAY RELATED CODE ******************
+
+# -- do_reply
+def do_reply(subj, msg)
+   options = { 
+               :address => @config['smtp_host'],
+               :port => @config['smtp_port'],
+	       :user_name => @config['user_name'],
+	       :password => @config['user_passwd'],
+	       :sender => @config['user_name'],
+	       :reply_email => @config['reply_email'],
+	       :enable_ssl => true
+	    }
+   Mail.defaults { delivery_method :smtp, options }
+   mail = Mail.new({:from => options[:sender], :to => options[:reply_email], :subject => subj, :body => msg})
+   mail.deliver!
 end
 
 # -- two_step_authenticate: send random number to reply_to email
@@ -292,27 +281,27 @@ end
 
 # -- pop mail
 def pop_mail
-   Net::POP3.enable_ssl(OpenSSL::SSL::VERIFY_NONE)
-   Net::POP3.start(@config['pop_host'], @config['pop_port'], @config['user_name'], @config['user_passwd']) do |pop|
-      if pop.mails.empty?
-         puts("-- no mail.")
-      else
-         pop.each_mail do |m|
-            puts("-- >>> processing new message ...")
-	    msg = m.pop
-	    # -- is the message one that we expect and know how to handle ?
-            if !/==.*==/.match(msg)
-               do_reply("-- ERROR: wrong argument supplied !", mail_help)
-	    else
-	       # -- ok, this message is for us
-	       msg = /^(.*)(==.*==).*$/.match(msg)[2].gsub(/==/, '').strip
-	       case msg
-                  when /help/
+      options = { :address => @config['pop_host'], :port => @config['pop_port'], :user_name => @config['user_name'], :password => @config['user_passwd'], :enable_ssl => true  }
+      Mail.defaults { retriever_method :pop3, options }
+      emails = Mail.all
+      puts "-- no mail" if emails.empty?
+      emails.each { |msg|
+         msg = msg.body.decoded
+         #return msg if msg.subject == subject
+         puts("-- >>> processing new message ...")
+         # -- is the message one that we expect and know how to handle ?
+         if !/==.*==/.match(msg)
+            do_reply("-- ERROR: wrong argument supplied !", mail_help)
+         else
+            # -- ok, this message is for us
+            msg = /^(.*)(==.*==).*$/.match(msg)[2].gsub(/==/, '').strip
+   	    case msg
+               when /help/
                      do_reply("-- Help on using mail interface delivered !", mail_help)
-                  when /list/
+               when /list/
                      xxx = `rake print_human`
                      do_reply("-- list of objects delivered !", xxx)
-                  when /play\s+.*$/
+               when /play\s+.*$/
 	             keyword = msg.gsub(/play/, '').strip
 		     # -- do we have two-step-authentication enabled ?
 		     if @config['two_step_authentication']
@@ -320,16 +309,13 @@ def pop_mail
 		     else
 		        play_request(keyword)
 	             end
-                  when /authentication:\s+.*$/
+               when /authentication:\s+.*$/
 	             code = msg.gsub(/authentication:/, '').strip
 		     authentication_process_code(code)
-	       end
 	    end
-            m.delete
             puts "-- >>> done ..."
          end
-      end
-   end
+      }
 end
 
 # -- start mail gateway
@@ -338,7 +324,7 @@ task :mail_gateway do
    pop_mail
 end
 
-# -- END EMAIL GATEWAY RELATED CODE
+# -- **************** END EMAIL GATEWAY RELATED CODE ************************
 
 # -- print tests
 desc "-- print tests..."
