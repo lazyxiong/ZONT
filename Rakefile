@@ -202,9 +202,9 @@ def load_test(tc)
    data = Hash.new
    File.open(tc, "r") do |infile|
       while (line = infile.gets)
-         #test                  = /^.*\/(.*\.rb)/.match(tc)[1]
-         test                  = /^.*\/([A-Za-z0-9_-]*[T|t]est.*)/.match(tc)[1]
-         data['execute_class'] = /^([A-Za-z0-9_-]*[T|t]est.*)/.match(tc)[1]
+	 test                  = /^.*\/([A-Za-z0-9_-]*.#{@config['test_extension']})/.match(tc)[1]
+         #data['execute_class'] = /^([A-Za-z0-9_-]*[T|t]est.*)/.match(tc)[1]
+	 data['execute_class'] = tc
          data['path']          = /(.*)\/#{test}/.match(tc)[1]
          data['execute_args']  = /^#[\s]*@executeArgs[\s]*(.*)/.match(line)[1] if /^#[\s]*@executeArgs/.match(line)
          data['author']        = /^#[\s]*@author[\s]*(.*)/.match(line)[1] if /^#[\s]*@author/.match(line)
@@ -218,7 +218,7 @@ end
 # -- find tests and load them one by one, applying keyword-filter at the end
 desc "-- find all tests..."
 task :find_all do
-   FileList["#{@config['test_dir']}/**/*[T|t]est#{@config['test_extension']}"].exclude(@config['excludes']).each { |tc_name|
+   FileList["#{@config['test_dir']}/**/*#{@config['test_extension']}"].exclude(@config['excludes']).each { |tc_name|
       load_test(tc_name)
    }
    filter_by_keywords
